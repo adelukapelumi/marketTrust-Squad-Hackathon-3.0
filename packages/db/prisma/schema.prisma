@@ -1,0 +1,426 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  TRADER
+  WORKER
+  OPERATOR
+  FINANCIAL_PARTNER
+  ADMIN
+}
+
+enum TraderStatus {
+  PROFILE_CREATED
+  KYC_PENDING
+  PAYMENT_ACCOUNT_ACTIVE
+  SUSPENDED
+}
+
+enum WorkerStatus {
+  PROFILE_CREATED
+  BANK_PENDING
+  ACTIVE
+  SUSPENDED
+}
+
+enum TaskStatus {
+  DRAFT
+  AWAITING_FUNDING
+  FUNDED
+  MATCHING
+  ASSIGNED
+  IN_PROGRESS
+  SUBMITTED_FOR_VERIFICATION
+  VERIFIED
+  DISPUTED
+  PAID_OUT
+  CANCELLED
+  EXPIRED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  ABANDONED
+  EXPIRED
+  MISMATCH
+  REFUNDED
+}
+
+enum PayoutStatus {
+  PENDING
+  ACCOUNT_LOOKUP_REQUIRED
+  ACCOUNT_LOOKUP_FAILED
+  TRANSFER_INITIATED
+  TRANSFER_SUCCESSFUL
+  TRANSFER_FAILED
+  TRANSFER_REVERSED
+  REQUERY_REQUIRED
+}
+
+enum FinancialReadinessTier {
+  PAYMENTS_ONLY
+  SAVINGS_READY
+  INSURANCE_READY
+  CREDIT_PREQUALIFIED
+  HIGH_TRUST
+}
+
+enum Channel {
+  MOBILE_APP
+  USSD
+  SMS
+  WHATSAPP
+  WEB
+}
+
+enum PaymentPurpose {
+  TRADER_SALE
+  TASK_FUNDING
+  OTHER
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum VerificationSignalType {
+  START_CODE
+  COMPLETION_CODE
+  TRADER_CONFIRMATION
+  PHOTO_PROOF
+  GPS_CHECKIN
+  TIME_SIGNAL
+  RECEIVER_CODE
+}
+
+enum TrustScoreType {
+  TRADER_TRUST
+  WORKER_TRUST
+  FINANCIAL_READINESS
+  DISPUTE_RISK
+}
+
+enum NotificationChannel {
+  SMS
+  WHATSAPP
+  PUSH
+  EMAIL
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+  REJECTED
+}
+
+model User {
+  id                        String                    @id @default(cuid())
+  role                      UserRole
+  phoneNumber               String                    @unique
+  email                     String?                   @unique
+  preferredLanguage         String?
+  preferredChannel          Channel?
+  isPhoneVerified           Boolean                   @default(false)
+  createdAt                 DateTime                  @default(now())
+  updatedAt                 DateTime                  @updatedAt
+  traderProfile             TraderProfile?
+  workerProfile             WorkerProfile?
+  financialReadinessProfile FinancialReadinessProfile?
+  taskVerificationEvents    TaskVerificationEvent[]
+  notifications             NotificationLog[]
+  trustScoreEvents          TrustScoreEvent[]         @relation("UserTrustScores")
+  auditActions              AuditLog[]                @relation("ActorAuditLogs")
+  disputesRaised            Dispute[]                 @relation("RaisedByUser")
+}
+
+model TraderProfile {
+  id                 String              @id @default(cuid())
+  userId             String              @unique
+  businessName       String
+  businessType       String
+  marketOrLocation   String
+  status             TraderStatus        @default(PROFILE_CREATED)
+  kycCompleted       Boolean             @default(false)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  user               User                @relation(fields: [userId], references: [id])
+  virtualAccount     VirtualAccount?
+  tasks              Task[]
+  receivedPayments   PaymentTransaction[] @relation("TraderPayments")
+  trustScoreEvents   TrustScoreEvent[]    @relation("TraderTrustScores")
+}
+
+model WorkerProfile {
+  id               String              @id @default(cuid())
+  userId           String              @unique
+  fullName         String?
+  skills           Json?
+  baseLocation     String
+  availabilityArea String?
+  status           WorkerStatus        @default(PROFILE_CREATED)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  user             User                @relation(fields: [userId], references: [id])
+  tasksAssigned    Task[]              @relation("AssignedWorker")
+  taskMatches      TaskMatch[]
+  payouts          Payout[]
+  trustScoreEvents TrustScoreEvent[]   @relation("WorkerTrustScores")
+}
+
+model VirtualAccount {
+  id             String   @id @default(cuid())
+  traderId       String   @unique
+  provider       String   @default("SQUAD")
+  accountName    String
+  accountNumber  String   @unique
+  bankName       String
+  reference      String   @unique
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  trader         TraderProfile @relation(fields: [traderId], references: [id])
+}
+
+model PaymentTransaction {
+  id                    String         @id @default(cuid())
+  reference             String         @unique
+  externalTransactionId String?
+  traderId              String?
+  taskId                String?
+  amountKobo            BigInt
+  currency              String         @default("NGN")
+  status                PaymentStatus  @default(PENDING)
+  purpose               PaymentPurpose
+  channel               Channel?
+  rawResponse           Json?
+  verifiedAt            DateTime?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+  trader                TraderProfile? @relation("TraderPayments", fields: [traderId], references: [id])
+  task                  Task?          @relation(fields: [taskId], references: [id])
+  taskFunding           TaskFunding?
+
+  @@index([taskId])
+  @@index([traderId])
+}
+
+model Task {
+  id                        String                   @id @default(cuid())
+  traderId                  String
+  assignedWorkerId          String?
+  status                    TaskStatus               @default(DRAFT)
+  taskType                  String
+  taskDescription           String
+  taskLocation              String
+  payAmountKobo             BigInt
+  preferredLanguage         String
+  neededTime                DateTime?
+  proofRequirement          String
+  dropoffLocation           String?
+  receiverName              String?
+  receiverPhone             String?
+  estimatedDurationMinutes  Int?
+  fundedAt                  DateTime?
+  assignedAt                DateTime?
+  startedAt                 DateTime?
+  submittedForVerificationAt DateTime?
+  verifiedAt                DateTime?
+  paidOutAt                 DateTime?
+  createdAt                 DateTime                 @default(now())
+  updatedAt                 DateTime                 @updatedAt
+  trader                    TraderProfile            @relation(fields: [traderId], references: [id])
+  assignedWorker            WorkerProfile?           @relation("AssignedWorker", fields: [assignedWorkerId], references: [id])
+  paymentTransactions       PaymentTransaction[]
+  funding                   TaskFunding?
+  taskMatches               TaskMatch[]
+  verificationEvents        TaskVerificationEvent[]
+  payout                    Payout?
+  dispute                   Dispute?
+
+  @@index([traderId])
+  @@index([assignedWorkerId])
+  @@index([status])
+}
+
+model TaskFunding {
+  id                   String            @id @default(cuid())
+  taskId               String            @unique
+  paymentTransactionId String            @unique
+  fundingReference     String            @unique
+  fundedAmountKobo     BigInt
+  status               PaymentStatus     @default(PENDING)
+  verifiedAt           DateTime?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  task                 Task              @relation(fields: [taskId], references: [id])
+  paymentTransaction   PaymentTransaction @relation(fields: [paymentTransactionId], references: [id])
+}
+
+model TaskMatch {
+  id          String       @id @default(cuid())
+  taskId      String
+  workerId    String
+  matchScore  Decimal      @db.Decimal(5, 2)
+  matchReason String
+  riskLevel   RiskLevel
+  isNotified  Boolean      @default(false)
+  acceptedAt  DateTime?
+  createdAt   DateTime     @default(now())
+  task        Task         @relation(fields: [taskId], references: [id])
+  worker      WorkerProfile @relation(fields: [workerId], references: [id])
+
+  @@index([taskId])
+  @@index([workerId])
+}
+
+model TaskVerificationEvent {
+  id          String                 @id @default(cuid())
+  taskId       String
+  actorUserId  String?
+  signalType   VerificationSignalType
+  signalValue  String?
+  metadata     Json?
+  occurredAt   DateTime               @default(now())
+  createdAt    DateTime               @default(now())
+  task         Task                   @relation(fields: [taskId], references: [id])
+  actorUser    User?                  @relation(fields: [actorUserId], references: [id])
+
+  @@index([taskId])
+  @@index([actorUserId])
+}
+
+model Payout {
+  id                 String       @id @default(cuid())
+  taskId             String       @unique
+  workerId           String
+  reference          String       @unique
+  amountKobo         BigInt
+  status             PayoutStatus @default(PENDING)
+  bankAccountNumber  String?
+  bankCode           String?
+  transferResponse   Json?
+  initiatedAt        DateTime?
+  settledAt          DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  task               Task         @relation(fields: [taskId], references: [id])
+  worker             WorkerProfile @relation(fields: [workerId], references: [id])
+
+  @@index([workerId])
+  @@index([status])
+}
+
+model TrustScoreEvent {
+  id            String                    @id @default(cuid())
+  subjectUserId String?
+  traderId      String?
+  workerId      String?
+  scoreType     TrustScoreType
+  score         Decimal                   @db.Decimal(5, 2)
+  reason        String?
+  metadata      Json?
+  createdAt     DateTime                  @default(now())
+  subjectUser   User?                     @relation("UserTrustScores", fields: [subjectUserId], references: [id])
+  trader        TraderProfile?            @relation("TraderTrustScores", fields: [traderId], references: [id])
+  worker        WorkerProfile?            @relation("WorkerTrustScores", fields: [workerId], references: [id])
+
+  @@index([subjectUserId])
+  @@index([traderId])
+  @@index([workerId])
+}
+
+model FinancialReadinessProfile {
+  id               String                 @id @default(cuid())
+  userId           String                 @unique
+  tier             FinancialReadinessTier @default(PAYMENTS_ONLY)
+  score            Decimal                @default(0) @db.Decimal(5, 2)
+  explainers       Json?
+  lastCalculatedAt DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  user             User                   @relation(fields: [userId], references: [id])
+}
+
+model NotificationLog {
+  id                String             @id @default(cuid())
+  userId            String?
+  channel           NotificationChannel
+  status            NotificationStatus @default(PENDING)
+  recipient         String
+  message           String
+  providerReference String?
+  errorMessage      String?
+  metadata          Json?
+  sentAt            DateTime?
+  createdAt         DateTime           @default(now())
+  user              User?              @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+}
+
+model WebhookEvent {
+  id             String   @id @default(cuid())
+  provider       String
+  eventType      String
+  eventId        String?
+  dedupeKey      String?  @unique
+  payload        Json
+  headers        Json?
+  signatureValid Boolean?
+  processed      Boolean  @default(false)
+  processedAt    DateTime?
+  createdAt      DateTime @default(now())
+
+  @@index([provider, eventType])
+  @@index([eventId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorUserId String?
+  action     String
+  entityType String
+  entityId   String
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  actorUser  User?    @relation("ActorAuditLogs", fields: [actorUserId], references: [id])
+
+  @@index([actorUserId])
+  @@index([entityType, entityId])
+}
+
+model Dispute {
+  id              String       @id @default(cuid())
+  taskId          String       @unique
+  raisedByUserId  String?
+  reason          String
+  status          DisputeStatus @default(OPEN)
+  resolutionNotes String?
+  resolvedAt      DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  task            Task         @relation(fields: [taskId], references: [id])
+  raisedByUser    User?        @relation("RaisedByUser", fields: [raisedByUserId], references: [id])
+
+  @@index([raisedByUserId])
+  @@index([status])
+}
